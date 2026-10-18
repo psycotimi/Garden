@@ -30,6 +30,7 @@ button.p{background:var(--acc);border-color:var(--acc);color:var(--bg)}
 h3{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut);margin:18px 0 6px}
 #zm{position:fixed;right:14px;bottom:calc(env(safe-area-inset-bottom,0px) + 14px);display:flex;flex-direction:column;gap:6px}#zm button{width:38px;height:38px;font-size:20px;padding:0}
 .f{display:block;margin:10px 0 4px;color:var(--mut);font-size:13px}
+#panel a{color:var(--acc);text-underline-offset:2px;word-break:break-word}
 </style></head><body>
 <canvas id="c"></canvas>
 <header><h1>Digital Garden</h1><input id="q" type="search" placeholder="Search the garden"><button id="add" class="p" hidden>+ Plant a topic</button><button id="dl" hidden>Download topics.json</button><button id="gh" hidden>GitHub connection</button><button id="rs" hidden>Reset draft</button><span id="note"></span></header>
@@ -172,6 +173,15 @@ function closePanel(){P.classList.remove('o');open=false;sel=null}
 function openNode(n){sel=n;n.type==='t'?viewTopic(n.t):viewKw(n)}
 function goKw(k){const n=nodes.find(x=>x.id==='k:'+k.trim().toLowerCase());if(n)openNode(n)}
 const okPath=u=>/^(https?:\/\/|data:image\/|[A-Za-z0-9_][A-Za-z0-9_\-. \/]*$)/.test(u);
+function inline(t){
+  const out=[],re=/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>"']+)/g;let last=0,m;
+  const a=(u,x)=>el('a',{href:u,target:'_blank',rel:'noopener noreferrer',textContent:x});
+  while(m=re.exec(t)){
+    if(m.index>last)out.push(t.slice(last,m.index));
+    if(m[1])out.push(a(m[2],m[1]));
+    else{const tail=m[3].match(/[.,;:!?)]+$/),u=tail?m[3].slice(0,-tail[0].length):m[3];out.push(a(u,u));if(tail)out.push(tail[0])}
+    last=re.lastIndex}
+  if(last<t.length)out.push(t.slice(last));return out}
 function body(b){
   const f=[];
   for(const line of(b||'').split('\n')){
@@ -181,7 +191,7 @@ function body(b){
       if(!okPath(u)||u.startsWith('data:'))f.push(el('p',{textContent:line}));
       else if(/\.(mp4|webm|mov|m4v)(\?.*)?$/i.test(u))f.push(el('video',{src:u,controls:true,preload:'metadata'}));
       else f.push(el('p',{},el('a',{href:u,target:'_blank',rel:'noopener noreferrer',textContent:'▶ Watch video'})))}
-    else if(line.trim())f.push(el('p',{textContent:line}))}
+    else if(line.trim())f.push(el('p',{},...inline(line)))}
   return f}
 function viewTopic(t){
   const rel=new Set();nodes.filter(n=>n.type==='k'&&n.topics.includes(t)).forEach(k=>k.topics.forEach(o=>o!==t&&rel.add(o)));
