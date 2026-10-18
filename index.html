@@ -32,27 +32,58 @@ h3{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut)
 .f{display:block;margin:10px 0 4px;color:var(--mut);font-size:13px}
 </style></head><body>
 <canvas id="c"></canvas>
-<header><h1>Digital Garden</h1><input id="q" type="search" placeholder="Search the garden"><button id="add" class="p" hidden>+ Plant a topic</button><button id="dl" hidden>Download topics.json</button><button id="rs" hidden>Reset draft</button><span id="note"></span></header>
+<header><h1>Digital Garden</h1><input id="q" type="search" placeholder="Search the garden"><button id="add" class="p" hidden>+ Plant a topic</button><button id="dl" hidden>Download topics.json</button><button id="gh" hidden>GitHub connection</button><button id="rs" hidden>Reset draft</button><span id="note"></span></header>
 <div id="zm"><button id="zi" aria-label="Zoom in">+</button><button id="zo" aria-label="Zoom out">&minus;</button></div>
 <aside id="panel"></aside>
 <script>
 const $=s=>document.querySelector(s);
+const GH={o:'psycotimi',r:'Garden'},TK='garden-gh-token';
 const EDIT=location.hash==='#edit',DK='garden-draft',INV=1; /* INV: set to -1 to flip vertical drag */
 let topics=[],canEdit=EDIT,nodes=[],edges=[],sel=null,hover=null,q='',open=false,msg='';
 addEventListener('hashchange',()=>location.reload());
 function el(t,a,...c){const e=document.createElement(t);for(const k in a||{}){if(k==='on')for(const v in a.on)e.addEventListener(v,a.on[v]);else if(k in e)e[k]=a[k];else e.setAttribute(k,a[k])}c.flat().forEach(x=>e.append(x));return e}
 
-/* ---------- data: topics.json next to index.html ---------- */
+/* ---------- data: topics.json (read from the site, or via the GitHub API when editing) ---------- */
+const tok=()=>{try{return localStorage.getItem(TK)||''}catch(e){return ''}};
+const enc=x=>btoa(unescape(encodeURIComponent(x)));
+const hash=x=>{let h=0;for(const c of x)h=(h*31+c.codePointAt(0))>>>0;return h.toString(36)};
+function norm(d){return(Array.isArray(d)?d:(d&&d.topics)||[]).map(t=>{const title=String(t.title||'');
+  return{...t,id:t.id||'t-'+hash(title),title,kw:Array.isArray(t.kw)?t.kw.map(String):String(t.kw||'').split(',').map(k=>k.trim()).filter(Boolean),body:String(t.body||'')}})}
+const gh=(path,o={})=>fetch('https://api.github.com/repos/'+GH.o+'/'+GH.r+'/contents/'+path,{cache:'no-store',...o,headers:{Accept:'application/vnd.github+json',Authorization:'Bearer '+tok(),...(o.headers||{})}});
+async function readRemote(){
+  const r=await gh('topics.json');
+  if(!r.ok)throw new Error(r.status===401?'token rejected':r.status===404?'topics.json not found, or the token has no access to the repo':'HTTP '+r.status);
+  const j=await r.json();let txt;
+  if(j.content&&j.encoding==='base64')txt=decodeURIComponent(escape(atob(j.content.replace(/\n/g,''))));
+  else txt=await(await gh('topics.json',{headers:{Accept:'application/vnd.github.raw+json'}})).text();
+  let d;try{d=JSON.parse(txt)}catch(e){throw new Error('topics.json is not valid JSON')}
+  return{list:norm(d),sha:j.sha}}
 async function init(){
-  try{const r=await fetch('topics.json',{cache:'no-store'});if(!r.ok)throw 0;topics=await r.json()}
-  catch(e){topics=[];msg='Could not load topics.json. Open the site through GitHub Pages or a local web server.'}
+  let live=false;
+  if(EDIT&&tok()){try{topics=(await readRemote()).list;live=true}catch(e){msg='Could not reach GitHub ('+e.message+'). Showing the published copy.'}}
+  if(!live){try{const r=await fetch('topics.json',{cache:'no-store'});if(!r.ok)throw 0;topics=norm(await r.json())}
+    catch(e){topics=[];msg=msg||'Could not load topics.json. Open the site through GitHub Pages or a local web server.'}}
   if(EDIT){
-    ['add','dl','rs'].forEach(i=>$('#'+i).hidden=false);
-    try{const d=JSON.parse(localStorage.getItem(DK)||'null');if(Array.isArray(d)){topics=d;msg='Showing your unpublished draft. Download topics.json and upload it to GitHub to publish.'}}catch(e){}
+    ['add','dl','rs','gh'].forEach(i=>$('#'+i).hidden=false);
+    if(!live){try{const d=JSON.parse(localStorage.getItem(DK)||'null');if(Array.isArray(d)){topics=norm(d);msg='Showing your unpublished draft. Connect GitHub or download topics.json to publish it.'}}catch(e){}}
   }
   rebuild();
 }
-function draft(){try{localStorage.setItem(DK,JSON.stringify(topics))}catch(e){}msg='Unpublished changes. Download topics.json and upload it to GitHub to publish.';rebuild()}
+function draft(m){try{localStorage.setItem(DK,JSON.stringify(topics))}catch(e){}msg=m||'Unpublished changes. Connect GitHub or download topics.json to publish them.';rebuild()}
+/* apply a change to the newest copy on GitHub, so edits from other devices are never overwritten */
+async function commit(fn,label){
+  if(!tok()){topics=fn(topics);draft();return false}
+  $('#note').textContent='Saving to GitHub…';let err='';
+  for(let k=0;k<2;k++){
+    try{
+      const{list,sha}=await readRemote(),next=fn(list);
+      const r=await gh('topics.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:label,content:enc(JSON.stringify(next,null,2)+'\n'),sha})});
+      if(r.status===409||r.status===422){err='HTTP '+r.status;continue}
+      if(!r.ok)throw new Error(r.status===401||r.status===403||r.status===404?'the token cannot write to this repo':'HTTP '+r.status);
+      topics=next;try{localStorage.removeItem(DK)}catch(e){}
+      msg='Saved to GitHub. The live site updates in about a minute.';rebuild();return true
+    }catch(e){err=e.message;break}}
+  topics=fn(topics);draft('Could not save to GitHub ('+err+'). Kept as an unpublished draft. You can download topics.json instead.');return false}
 function download(){
   const a=el('a',{href:URL.createObjectURL(new Blob([JSON.stringify(topics,null,2)],{type:'application/json'})),download:'topics.json'});
   document.body.append(a);a.click();a.remove()}
@@ -131,7 +162,7 @@ cv.addEventListener('wheel',e=>{e.preventDefault();setZoom(zoom*Math.exp(-e.delt
 $('#zi').onclick=()=>setZoom(zoom*1.25);$('#zo').onclick=()=>setZoom(zoom/1.25);
 addEventListener('keydown',e=>{if(e.target.matches('input,textarea'))return;if(e.key==='+'||e.key==='=')setZoom(zoom*1.15);if(e.key==='-')setZoom(zoom/1.15)});
 $('#q').addEventListener('input',e=>{q=e.target.value.trim().toLowerCase()});
-$('#add').onclick=()=>edit();$('#dl').onclick=download;
+$('#add').onclick=()=>edit();$('#dl').onclick=download;$('#gh').onclick=()=>tokenPanel();
 $('#rs').onclick=()=>{try{localStorage.removeItem(DK)}catch(e){}location.reload()};
 
 /* ---------- panel ---------- */
@@ -183,16 +214,39 @@ function edit(old){
     el('label',{className:'f',textContent:'Body'}),bo,
     el('div',{className:'row'},pi),
     el('div',{className:'row'},el('button',{textContent:'+ Picture',on:{click:add('img')}}),el('button',{textContent:'+ Video',on:{click:add('video')}}),
-      el('button',{textContent:'+ Embed picture from device',on:{click:()=>{const i=el('input',{type:'file',accept:'image/*'});i.onchange=async()=>{if(!i.files[0])return;try{ins('\n[img:'+await shrink(i.files[0])+']\n')}catch(e){st.textContent='That file could not be added.'}};i.click()}}})),
+      el('button',{textContent:'+ Picture from device',on:{click:()=>{const i=el('input',{type:'file',accept:'image/*'});i.onchange=async()=>{if(!i.files[0])return;try{
+        const d=await shrink(i.files[0]);
+        if(tok()){st.textContent='Uploading picture…';const name='images/'+Date.now().toString(36)+'.jpg';
+          const r=await gh(name,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:'Add picture',content:d.split(',')[1]})});
+          if(!r.ok)throw new Error('Upload failed (HTTP '+r.status+')');ins('\n[img:'+name+']\n');st.textContent='Picture uploaded. It appears on the live site after about a minute.'}
+        else ins('\n[img:'+d+']\n')}catch(e){st.textContent=e.message||'That file could not be added.'}};i.click()}}})),
     st,
     el('div',{className:'row'},
-      el('button',{className:'p',textContent:'Save',on:{click:()=>{
+      el('button',{className:'p',textContent:'Save',on:{click:async()=>{
         if(!ti.value.trim()){st.textContent='Please give it a title.';return}
         const n={id:t.id,title:ti.value.trim(),kw:[...new Set(ki.value.split(',').map(s=>s.trim().toLowerCase()).filter(Boolean))],body:bo.value};
-        const i=topics.findIndex(x=>x.id===n.id);i<0?topics.push(n):topics[i]=n;draft();
+        await commit(l=>{const i=l.findIndex(x=>x.id===n.id);return i<0?[...l,n]:l.map((x,j)=>j===i?n:x)},'Update topic: '+n.title);
         const nn=nodes.find(x=>x.id===n.id);nn?openNode(nn):closePanel()}}}),
       el('button',{textContent:'Cancel',on:{click:()=>old?viewTopic(old):closePanel()}}),
-      old?(()=>{const b=el('button',{textContent:'Delete'});let s=0;b.onclick=()=>{if(!s){s=1;b.textContent='Sure? Click again';return}topics=topics.filter(x=>x.id!==old.id);draft();closePanel()};return b})():''))}
+      old?(()=>{const b=el('button',{textContent:'Delete'});let s=0;b.onclick=async()=>{if(!s){s=1;b.textContent='Sure? Click again';return}await commit(l=>l.filter(x=>x.id!==old.id),'Delete topic: '+old.title);closePanel()};return b})():''))}
+
+function tokenPanel(){
+  const ti=el('input',{type:'password',placeholder:'Paste token here',autocomplete:'off'}),st=el('div',{style:'color:var(--mut);font-size:13px;min-height:20px'});
+  show(el('h2',{textContent:'GitHub connection'}),
+    el('p',{textContent:tok()?'Connected. Saving a topic writes it straight to topics.json on GitHub.':'Not connected. Saving only keeps a draft that you download yourself.'}),
+    el('p',{textContent:'The token stays in this browser only. Do this once on each device you edit from.'}),
+    el('p',{textContent:'1. Create a fine-grained token on GitHub. 2. Repository access: only select repositories, and choose Garden. 3. Repository permissions: Contents, Read and write. 4. Set an expiry, generate it and paste it below.'}),
+    el('p',{},el('a',{href:'https://github.com/settings/personal-access-tokens/new',target:'_blank',rel:'noopener noreferrer',textContent:'Create a token on GitHub'})),
+    ti,
+    el('div',{className:'row'},
+      el('button',{className:'p',textContent:'Save token',on:{click:async()=>{
+        const v=ti.value.trim();if(!v){st.textContent='Paste the token first.';return}
+        try{localStorage.setItem(TK,v)}catch(e){st.textContent='This browser blocks storage.';return}
+        st.textContent='Checking…';
+        try{const r=await readRemote();topics=r.list;try{localStorage.removeItem(DK)}catch(e){}msg='';rebuild();st.textContent='Connected. Found '+r.list.length+' topics in topics.json.'}
+        catch(e){try{localStorage.removeItem(TK)}catch(x){}st.textContent='Could not connect: '+e.message}}}}),
+      el('button',{textContent:'Remove token',on:{click:()=>{try{localStorage.removeItem(TK)}catch(e){}st.textContent='Token removed from this browser.'}}})),
+    st)}
 
 init();requestAnimationFrame(draw);
 </script></body></html>
